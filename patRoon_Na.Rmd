@@ -1,0 +1,370 @@
+---
+title: "paTroonNa"
+author: "Alba Moya Garcés"
+date: "12 de enero de 2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, cache=TRUE, warning=FALSE)
+```
+
+
+```{r}
+
+library(patRoon)
+#####
+#run to see if patRoon can find all its dependecies
+patRoon::verifyDependencies()
+#install and set those not found
+options(patRoon.path.MetFragCL = "C:/Program Files/MetFrag2.4.5-CL.jar")
+options(patRoon.path.pngquant = "C:/Program Files/pngquant")
+options(patRoon.path.MetFragCompTox = "C:/Users/ASUS/Documents/CompTox_17March2019_SelectMetaData.csv")
+options(patRoon.path.MetFragPubChemLite = "C:/Users/ASUS/Documents/PubChemLite_31Oct2020_exposomics.csv")
+##########
+# Checking ProteoWizard... found! (directory 'C:/PROGRA~1/OPENMS~1.0/share/OpenMS/THIRDP~1/pwiz-bin')
+# Checking OpenMS... found!
+# Checking pngquant... found! (in 'C:/Program Files/pngquant')
+# Checking SIRIUS... found!
+# Checking MetFrag CL... found! (in 'C:/Program Files')
+# Checking MetFrag CompTox Database... found! (in 'C:/Users/ASUS/Documents')
+# Checking MetFrag PubChemLite Database... found! (in 'C:/Users/ASUS/Documents')
+# Checking OpenBabel... found!
+###########
+## --> options(patRoon.path.OpenMS = "C:/Program Files/OpenMS-2.6.0/bin")
+# directory with the OpenMS binaries
+
+library(readxl)
+library(rJava)
+library(plyr)
+```
+
+***
+# initialization
+***
+https://rickhelmus.github.io/patRoon/articles/tutorial.html
+Generamos un proyecto, bien con la función 
+```{r}
+#newProject()
+```
+ o directamente en RStudio -> File -> New Project
+ esto nos permitirá establecer el "working directory" de manera automática y tener todos los archivos juntos en la misma carpeta. 
+ Cada vez que se continue con el trabajo, se abre la carpeta del proyecto en el escritorio y R ya lo reconoce.
+
+
+## generateAnalysisInfo
+Cargamos la información del análisis.
+Esta función toma el directorio dado (en nuestro caso la carpeta donde se encuentran los datos) y rellena automáticamente las dos primeras columnas.
+
+```{r anaInfo}
+anaInfo <- generateAnalysisInfo(paths = c("mzML_pos"),
+                                groups = c("Blank", "Blank", "House", "Public"),
+                                blanks = c("Blank", "Blank", "Blank", "Blank"))
+anaInfo
+```
+
+Esta información se necesitará más adelante.
+
+
+***
+# features
+***
+El primer paso setá la extracción de los "features". Son los picos que se pueden ver en el cromatrograma de iones. Una muestra compleja suele tener entre cientos y miles de features.
+
+## findFeatures
+Esta función necesta la información contenida en `anaInfo` y el algoritmo que queremos usar
+
+`findFeaturesOpenMS(
+  analysisInfo,
+  noiseThrInt = 1000,
+  chromSNR = 3,
+  chromFWHM = 5,
+  mzPPM = 10, **5**
+  reEstimateMTSD = TRUE,
+  traceTermCriterion = "sample_rate",
+  traceTermOutliers = 5,
+  minSampleRate = 0.5, **0.25**
+  minTraceLength = 3,
+  maxTraceLength = -1,
+  widthFiltering = "fixed",
+  minFWHM = 3,
+  maxFWHM = 60,
+  traceSNRFiltering = FALSE,
+  localRTRange = 10,
+  localMZRange = 6.5,
+  isotopeFilteringModel = "metabolites (5% RMS)",
+  MZScoring13C = FALSE,
+  useSmoothedInts = TRUE,
+  extraOpts = NULL,
+  intSearchRTWindow = 3,
+  logPath = file.path("log", "openms"),
+  maxProcAmount = getOption("patRoon.maxProcAmount"),
+  verbose = TRUE
+)`
+```{r findFeatures}
+#se utilizará OpenMs y los parámetros por defecto
+fList <- findFeatures(anaInfo, "openms")
+#saveRDS(fList, "fList.rds")
+fList
+as.data.table(fList)
+#write.csv(as.data.table(fList), file = "flistNa.csv", append = FALSE, quote = TRUE, sep = " ", na = "NA", dec = ".", row.names = TRUE, col.names = TRUE)
+```
+
+## groupFeatures()
+Posteriormente, se **agrupan** los features de los diferentes análisis.
+**Opcional, alineamiento de tiempos de retención** ¿¿??
+
+Este agrupamiento es importante para mitigar posibles variaciones entre tiempo de retención y m/z
+
+groupFeaturesOpenMS(
+  feat,
+  rtalign = TRUE,
+  QT = FALSE,
+  maxAlignRT = 30,
+  maxAlignMZ = 0.005,
+  maxGroupRT = 12,
+  maxGroupMZ = 0.005,
+  extraOptsRT = NULL,
+  extraOptsGroup = NULL,
+  verbose = TRUE
+)
+
+```{r groupFeatures}
+# Group and align features between analysis
+fGroups <- groupFeatures(fList, "openms")
+saveRDS(fGroups, "fGroups.rds")
+fGroups
+```
+
+## filter
+
+Limpieza de datos
+Se aplican los criterios de filtrado iniciales
+
+```{r filter}
+# fGroups <- filter(fGroups, preAbsMinIntensity = 100, absMinIntensity = 10000,
+#                   relMinReplicateAbundance = 1, maxReplicateIntRSD = 0.75,
+#                   blankThreshold = 5, removeBlanks = TRUE,
+#                   retentionRange = NULL, mzRange = NULL)
+
+fGroups <- filter(fGroups, preAbsMinIntensity = 10000, absMinIntensity = 1000000,
+                  relMinReplicateAbundance = 1, maxReplicateIntRSD = 0.75,
+                  blankThreshold = 5, removeBlanks = TRUE,
+                  retentionRange = c(50, Inf), mzRange = NULL)
+# se cambia preabsmin y absmin para obtener menos ruido
+saveRDS(fGroups, "fGroups_filter.rds")
+```
+
+
+`PreAbsMinIntensity` `absMinIntensity` intensidad por debajo de la cual se elimina el dato antes y después del filtrado, respectivamente
+ 
+`relMinReplicateAbundance` para controlar features no presentes en todas las réplicas. Un valor de 0.5 indicaría que el pico debería estar presente en al menos la mitad de las muestras. Un valor de 1 eliminará todos los outliers causados por picos que realmente no representan un pico cromatográfico bien definido.
+`maxReplicateIntRSD`desviación estandar relativa de las intensidades
+`blankThreshold`valor de significancia. La intensidad debe se al menos tantas veces superior a la de la señal del blanco
+`removeBlanks` borra los blancos después del filtrado
+`retentionRange` y `mzRange` elimina los features fuera del rango dado
+
+## resultados
+
+```{r plottingEx}
+fGroups
+head(as.data.table(fGroups))
+head(groupInfo(fGroups))
+
+library(generics)
+# plotChroms(fGroups, colourBy = "fGroups", showFGroupRect = FALSE, showPeakArea = TRUE,
+#            topMost = 1, showLegend = FALSE)
+
+plotEIC(fGroups, colourBy = "fGroups", showFGroupRect = FALSE, showPeakArea = TRUE, topMost = 1, showLegend = FALSE)
+```
+Sólo vemos el feature más intenso de cada grupo (`topMost`= 1)
+
+### Filter feature groups by suspects
+
+```{r screenSuspects}
+#cargamos el archivo
+suspFile <- read_excel("MassBankEU_Cmpds_11042017_wMS_DTXSIDs_03102017.xlsx")
+
+#cambiamos nombres de columnas
+###mirar bien como hacerlo automático #####
+names(suspFile)[2]="name"
+names(suspFile)[4]="neutralMass"
+names(suspFile)[5]="formula"
+names(suspFile)[6]="InChI"
+
+
+#hacemos el filtrado
+scr <-screenSuspects(fGroups, suspFile, rtWindow = 12, mzWindow = 0.005,
+                          adduct = "[M+Na]+")
+
+###mirar como automatizarlo según adduct
+### ¿reconoce los distintos adducts contenidos en la misma celda?
+##+ ver como filtrar para que no repita compuestos diferentes que realmente son el mismo y aparece varias veces (columnaA, filaX = columnaB, fila Y)
+###
+#**** en group, hace que los groups sean únicos añadiendo el .número
+saveRDS(scr, "scr.rds")
+```
+
+```{r}
+fGroups_scr <- groupFeaturesScreening(fGroups, scr)
+fGroups_scr
+#saveRDS(fGroups_scr, "fGroups_scr.rds")
+as.data.table(fGroups_scr)
+```
+
+```{r}
+plotEIC(fGroups_scr, colourBy = "fGroups_scr", showFGroupRect = FALSE, showPeakArea = TRUE, topMost = 1, showLegend = FALSE)
+```
+
+**
+# annotation
+**
+
+
+## Retrieve MS peak lists
+
+Extraemos los datos MS
+
+```{r}
+avgPListParams <- getDefAvgPListParams(clusterMzWindow = 0.005)
+saveRDS(avgPListParams, "avgPListParams.rds")
+avgPListParams
+```
+
+Cuanto mayor sea la resolución del instrumental, menor clusterMzWindows se puede utilizar.
+
+```{r}
+mslists <- generateMSPeakLists(fGroups_scr, "mzr", maxMSRtWindow = 5, precursorMzWindow = NULL, avgFeatParams = avgPListParams, avgFGroupParams = avgPListParams)
+#During spectral averaging multiple masses from the same spectrum were #clustered, consider tweaking clusterMzWindow!
+mslists
+saveRDS(mslists, "mslists.rds")
+```
+
+
+
+```{r}
+mslist <-as.data.frame(mslists)
+write.csv(as.data.table(mslists), file = "mslistsNa.csv", append = FALSE, quote = TRUE, sep = " ", na = "NA", dec = ".", row.names = TRUE, col.names = TRUE)
+
+```
+
+filtramos más los resultados ¿¿??
+```{r}
+# uncomment and configure for extra filtering of MS peak lists 
+#mslists <- filter(mslists, 
+# absMSIntThr = NULL, absMSMSIntThr = NULL, relMSIntThr = NULL, relMSMSIntThr = NULL, topMSPeaks = NULL, topMSMSPeaks = NULL, deIsotopeMS = FALSE, deIsotopeMSMS = FALSE)
+```
+
+### plots
+
+```{r}
+# plotSpectrum(mslists, "9-Anthracenecarboxylic acid|Anthracene-9-carboxylic acid") # non-annotated MS spectrum
+# plotSpectrum(mslists, "M186_R265_296", MSLevel = 2) # non-annotated MS-MS spectrum
+plotSpec(mslists, "2-Aminobiphenyl|2-phenylaniline") # non-annotated MS spectrum
+plotSpec(mslists, MSLevel = 2) # non-annotated MS-MS spectrum)
+```
+
+## Calculate formula candidates
+
+Muy recomendable limitar los elementos para reducir el tiempo y número de resultados
+```{r}
+formulas <- generateFormulas(fGroups_scr, "genform", mslists, relMzDev = 5, adduct = "[M+Na]+", elements = "CHNOPClS", calculateFeatures = TRUE, featThreshold = 0.75)
+## buscar todos los posibles elementos en la columna fórmulas (elements="todos")
+##no prioritario
+
+### ver cómo añadir todos los elementos que encuentre
+saveRDS(formulas, "formulas.rds")
+formulas
+```
+
+`generateFormulas()` genera una lista con todas las fórmulas posibles para cada grupo.
+`calculateFeatures` indica que las fórmulas se calcularán primero por features individuales dentro del mismo grupo. Los resultados se consensuan para crear la lista de fórmulas candidatas para todos los features del grupo.
+`featThreshold` elimina los features outliers.
+`calculateFeatures` si FALSE, calcula las fórmulas directamente de cada grupo, usando la MS list. Esto es más rápido pero los resultados pueden ser menos "accurate".
+
+```{r}
+as.data.table(formulas)
+write.csv(as.data.table(formulas), file = "formulasNa.csv", append = FALSE, quote = TRUE, sep = " ", na = "NA", dec = ".", row.names = TRUE, col.names = TRUE)
+
+
+```
+
+### plots
+
+```{r}
+plotSpec(formulas, "C17H22NO4", "Cocaine| (1S,3S,4R,5R)-3-benzoyloxy-8-methyl-8-azabicyclo[3.2.1]octane-4-carboxylic acid methyl ester", MSPeakLists = mslists)
+plotSpec(formulas, "C6H5NH2", "2,3-Dihydroxybiphenyl|Biphenyl-2,3-diol|3-phenylbenzene-1,2-diol", MSPeakLists = mslists)
+```
+
+## Find compound structure candidates
+
+Se utiliza MetFrag  para sacar una lista de posibles estructuras candidatas para cada grupo de features. Patroon tiene que tener el path correcto (en el primer Chunk)
+
+```{r}
+compounds <- generateCompounds(fGroups, mslists, "metfrag", method = "CL", dbRelMzDev = 5, fragRelMzDev = 5, fragAbsMzDev = 0.002, adduct = "[M+Na]+", database = "pubchem", maxCandidatesToStop = 2500)
+compounds
+```
+
+```{r}
+as.data.table(compounds)
+write.csv(as.data.table(compounds), file = "compoundsNa.csv", append = FALSE, quote = TRUE, sep = " ", na = "NA", dec = ".", row.names = TRUE, col.names = TRUE)
+compounds_table <- as.data.table(compounds)
+
+```
+
+```{r}
+compounds <- addFormulaScoring(compounds, formulas, updateScore = TRUE)
+saveRDS(compounds, "compounds.rds")
+compounds_formula <- as.data.table(compounds)
+compounds
+```
+
+```{r}
+group_name <- as.vector(compounds_table$group)
+groups_table <- as.data.frame(table(group_name))
+groups_table
+#así lo ordenamos por frecuencia y elijo una con pocos picos
+```
+
+`plotSpec` 
+
+```{r}
+
+plotSpec(compounds, index=1, "nicotinamide|pyridine-3-carboxamide.2", mslists)
+plotSpec(compounds, index=1, "nicotinamide|pyridine-3-carboxamide.2", mslists, xlim=c(80,200), ylim=c(0,2e+07))
+plotSpec(compounds, index=2, "Tetraglyme|1-methoxy-2-[2-[2-(2-methoxyethoxy)ethoxy]ethoxy]ethane", mslists)
+```
+
+
+# Perform automatic generation of components
+
+```{r}
+#cambio ramclustr
+components <- generateComponents(fGroups, "nontarget", ionization = "positive")
+components
+```
+
+
+# -------------------------
+# reporting
+# -------------------------
+
+
+```{r}
+reportPDF(fGroups_scr, path = "report", reportFGroups = TRUE, formulas = formulas, reportFormulaSpectra = TRUE,
+          compounds = compounds, compoundsNormalizeScores = "max",
+          components = components, MSPeakLists = mslists)
+```
+
+reportCSV(fGroups, path = "report", reportFeatures = FALSE, formulas = formulas,
+          compounds = compounds, compoundsNormalizeScores = "max",
+          components = components)
+
+reportPDF(fGroups, path = "report", reportFGroups = TRUE, formulas = formulas, reportFormulaSpectra = TRUE,
+          compounds = compounds, compoundsNormalizeScores = "max",
+          components = components, MSPeakLists = mslists)
+
+reportHTML(fGroups, path = "report", reportPlots = c("chord", "venn", "upset", "eics", "formulas"),
+           formulas = formulas, compounds = compounds, compoundsNormalizeScores = "max",
+           components = components, MSPeakLists = mslists,
+           selfContained = FALSE, openReport = TRUE)
